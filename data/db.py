@@ -1,4 +1,5 @@
 import sqlite3
+import time
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
@@ -60,6 +61,20 @@ def fetch_counts(conn: sqlite3.Connection) -> list[tuple[int, int, int, int]]:
     return conn.execute(
         "SELECT timestamp, car_count, bike_count, bus_count"
         " FROM traffic_counts ORDER BY timestamp"
+    ).fetchall()
+
+
+def fetch_completed_counts(
+    conn: sqlite3.Connection,
+    current_timestamp: int | None = None,
+) -> list[tuple[int, int, int, int]]:
+    """Return minute buckets that ended before the current minute."""
+    now = int(time.time()) if current_timestamp is None else current_timestamp
+    current_minute = now - now % 60
+    return conn.execute(
+        "SELECT timestamp, car_count, bike_count, bus_count"
+        " FROM traffic_counts WHERE timestamp < ? ORDER BY timestamp",
+        (current_minute,),
     ).fetchall()
 
 

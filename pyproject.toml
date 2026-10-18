@@ -11,4 +11,4 @@ requires-python = ">=3.10"
 dependencies = ["fastapi", "uvicorn"]
 
 [tool.setuptools]
-packages = ["common", "data"]
+packages = ["common", "data", "dashboard"]

@@ -63,3 +63,26 @@ Generate mock events, aggregate, and write them in a single run:
 - `--db` — SQLite database path (default: `data/traffic.db`)
 
 The script prints a per-minute count table and totals per vehicle type.
+
+## Running the dashboard
+
+The dashboard reads the same SQLite database and does not clear or modify it.
+Start it separately from the ingest service:
+
+```powershell
+.\venv\Scripts\python.exe -m dashboard.app --port 8001
+```
+
+Open <http://127.0.0.1:8001/dashboard> in a browser. The page polls the
+database every minute and displays cars, bikes, and buses on a live
+graph. Only completed minute buckets are shown, so the current in-progress
+minute appears after the minute ends.
+
+The `tests/` folder contains small regression tests for the minute-boundary
+query and dashboard response. They prevent changes to the live update behavior
+from silently showing incomplete data.
+
+Options:
+
+- `dashboard.app`: `--host` (default `127.0.0.1`), `--port` (default `8001`),
+  `--db` (default `data/traffic.db`)
