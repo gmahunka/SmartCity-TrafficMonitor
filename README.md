@@ -17,38 +17,63 @@ or install the runtime dependencies directly:
 
 ## Running the data ingestion
 
-Detections (car / bike / bus) are aggregated into per-minute counts and
+Detections (car / bus / truck / motorcycle / bicycle) are aggregated into per-minute counts and
 stored in SQLite at `data/traffic.db`. The database is cleared on every
 fresh run.
 
-### Live mode (HTTP bridge, simulates Person 2 -> Person 3)
+## Running the YouTube CV pipeline
 
-Terminal 1 — start the ingest service (clears the DB on startup):
+The integrated CV runner resolves a YouTube stream with `yt-dlp`, keeps only
+the newest decoded frame, runs YOLO with ByteTrack tracking, and writes each
+counted vehicle into the same SQLite database used by the dashboard. The
+included `yolo26n.pt` model is used by default.
 
-```powershell
-.\venv\Scripts\python.exe -m data.ingest_service --port 8000
-```
-
-Terminal 2 — start the mock sender (emits 0–5 random detections every 5 s
-and POSTs them to the service):
+Install the CV dependencies after installing the project:
 
 ```powershell
-.\venv\Scripts\python.exe -m data.mock_sender
+.\venv\Scripts\python.exe -m pip install -e .
 ```
 
-The service writes to SQLite and answers each POST only after the commit;
-the sender prints that ack (minute bucket + counts written), so a printed
-ack means "DB write done for that timestamp". Inspect the stored table at
-any time:
+Then start the pipeline with a YouTube URL:
 
 ```powershell
-curl.exe http://127.0.0.1:8000/counts
+.\venv\Scripts\python.exe -m cv.run `
+  --url "https://www.youtube.com/watch?v=sTF-6_xinUU" `
+  --db data\traffic.db
 ```
 
-Options:
+The CV runner also serves the annotated live stream at
+`http://127.0.0.1:8002/stream`. The dashboard embeds this stream automatically.
+On the same computer, start the dashboard without `--stream-url` so it uses
+the local stream:
 
-- `data.ingest_service`: `--host` (default 127.0.0.1), `--port` (default 8000), `--db` (default `data/traffic.db`)
-- `data.mock_sender`: `--url`, `--interval` (default 5 s), `--seed`, `--ticks N` (stop after N ticks, 0 = run forever)
+```powershell
+.\venv\Scripts\python.exe -m dashboard.app --port 8001
+```
+
+Open these local links:
+
+- Dashboard: <http://127.0.0.1:8001/dashboard>
+- Annotated stream: <http://127.0.0.1:8002/stream>
+- Dashboard data: <http://127.0.0.1:8001/dashboard/data>
+
+If the dashboard runs on another machine, replace `CAMERA-HOST` with the
+actual hostname or IP address of the computer running `cv.run`:
+
+```powershell
+.\venv\Scripts\python.exe -m dashboard.app `
+  --stream-url "http://CAMERA-HOST:8002/stream"
+```
+
+Tracked vehicles are counted once after `--min-hits` frames. Use `--show` for
+an OpenCV debug window. YouTube extraction may require the
+Deno JavaScript runtime for current `yt-dlp` versions.
+If FFmpeg logs a `Cannot reuse HTTP connection for different host` warning,
+the runner disables HTTP connection reuse automatically because YouTube can
+redirect signed media URLs between different `googlevideo.com` hosts.
+
+The dashboard displays only completed minute buckets and includes separate
+series for cars, buses, trucks, motorcycles, and bicycles.
 
 ### Batch mode (offline, one-shot, stdlib only)
 
@@ -66,7 +91,8 @@ The script prints a per-minute count table and totals per vehicle type.
 
 ## Running the dashboard
 
-The dashboard reads the same SQLite database and does not clear or modify it.
+The dashboard reads the same SQLite database and preserves it during normal
+operation.
 Start it separately from the ingest service:
 
 ```powershell
@@ -74,9 +100,13 @@ Start it separately from the ingest service:
 ```
 
 Open <http://127.0.0.1:8001/dashboard> in a browser. The page polls the
-database every minute and displays cars, bikes, and buses on a live
+database every minute and displays cars, buses, trucks, motorcycles, and bicycles on a live
 graph. Only completed minute buckets are shown, so the current in-progress
 minute appears after the minute ends.
+
+Use the **Clear database** button to explicitly remove all stored raw events and
+aggregate minute buckets. The action requires confirmation and does not remove
+the database schema.
 
 The `tests/` folder contains small regression tests for the minute-boundary
 query and dashboard response. They prevent changes to the live update behavior

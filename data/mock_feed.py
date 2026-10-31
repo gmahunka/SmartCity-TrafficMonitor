@@ -3,7 +3,7 @@ import time
 
 from common.events import VehicleEvent
 
-TYPE_WEIGHTS = {"car": 0.6, "bike": 0.3, "bus": 0.1}
+TYPE_WEIGHTS = {"car": 0.6, "bicycle": 0.3, "bus": 0.1}
 SPAN_SECONDS = 600
 
 

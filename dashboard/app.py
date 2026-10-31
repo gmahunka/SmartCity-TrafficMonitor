@@ -6,7 +6,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 
-from data.db import DEFAULT_DB_PATH, connect, fetch_completed_counts
+from data.db import DEFAULT_DB_PATH, clear_db, connect, fetch_completed_rich_counts
 
 PAGE = """<!doctype html>
 <html lang="en">
@@ -22,6 +22,10 @@ PAGE = """<!doctype html>
     p { color: #9ca3af; margin: 0 0 24px; }
     .panel { background: #1f2937; border: 1px solid #374151; border-radius: 12px; padding: 20px; }
     .meta { color: #9ca3af; font-size: .875rem; margin-bottom: 12px; }
+    .actions { display: flex; justify-content: flex-end; margin-bottom: 20px; }
+    button { background: #b91c1c; border: 0; border-radius: 6px; color: white; cursor: pointer; padding: 9px 14px; }
+    button:disabled { cursor: wait; opacity: .6; }
+    .stream { background: #111827; border-radius: 8px; display: block; margin-bottom: 20px; max-height: 560px; object-fit: contain; width: 100%; }
     canvas { display: block; height: 420px; max-width: 100%; width: 100%; }
     .legend { display: flex; gap: 18px; margin-top: 14px; }
     .legend span::before { background: var(--color); border-radius: 50%; content: ""; display: inline-block; height: 9px; margin-right: 7px; width: 9px; }
@@ -33,12 +37,16 @@ PAGE = """<!doctype html>
     <h1>Traffic monitor</h1>
     <section class="panel">
       <div class="meta" id="status">Loading…</div>
+      <div class="actions"><button id="clear-db" type="button">Clear database</button></div>
+      <img class="stream" src="STREAM_URL" alt="Live annotated traffic stream">
       <div id="empty" class="empty" hidden>No completed minute data yet.</div>
       <canvas id="chart" aria-label="Vehicle counts per minute" role="img"></canvas>
       <div class="legend">
         <span style="--color:#60a5fa">Cars</span>
-        <span style="--color:#34d399">Bikes</span>
         <span style="--color:#fbbf24">Buses</span>
+        <span style="--color:#f87171">Trucks</span>
+        <span style="--color:#c084fc">Motorcycles</span>
+        <span style="--color:#34d399">Bicycles</span>
       </div>
     </section>
   </main>
@@ -46,10 +54,13 @@ PAGE = """<!doctype html>
     const canvas = document.getElementById("chart");
     const status = document.getElementById("status");
     const empty = document.getElementById("empty");
+    const clearButton = document.getElementById("clear-db");
     const series = [
       { key: "car", color: "#60a5fa" },
-      { key: "bike", color: "#34d399" },
-      { key: "bus", color: "#fbbf24" }
+      { key: "bus", color: "#fbbf24" },
+      { key: "truck", color: "#f87171" },
+      { key: "motorcycle", color: "#c084fc" },
+      { key: "bicycle", color: "#34d399" }
     ];
 
     function draw(buckets) {
@@ -108,6 +119,21 @@ PAGE = """<!doctype html>
         status.textContent = `Unable to load data: ${error.message}`;
       }
     }
+    clearButton.addEventListener("click", async () => {
+      if (!window.confirm("Clear all stored traffic events and minute counts?")) return;
+      clearButton.disabled = true;
+      try {
+        const response = await fetch("/dashboard/clear", { method: "POST" });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        status.textContent = `Database cleared · ${data.deleted_events} events and ${data.deleted_buckets} minute buckets removed`;
+        draw([]);
+      } catch (error) {
+        status.textContent = `Unable to clear database: ${error.message}`;
+      } finally {
+        clearButton.disabled = false;
+      }
+    });
     window.addEventListener("resize", refresh);
     refresh();
     setInterval(refresh, 60000);
@@ -117,6 +143,7 @@ PAGE = """<!doctype html>
 
 app = FastAPI(title="Traffic dashboard")
 app.state.db_path = DEFAULT_DB_PATH
+app.state.stream_url = "http://127.0.0.1:8002/stream"
 
 
 def format_datetime(timestamp: int) -> str:
@@ -125,14 +152,14 @@ def format_datetime(timestamp: int) -> str:
 
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard() -> str:
-    return PAGE
+    return PAGE.replace("STREAM_URL", app.state.stream_url)
 
 
 @app.get("/dashboard/data")
 def dashboard_data(request: Request) -> dict:
     conn = connect(request.app.state.db_path)
     try:
-        rows = fetch_completed_counts(conn)
+        rows = fetch_completed_rich_counts(conn)
     finally:
         conn.close()
     return {
@@ -141,12 +168,26 @@ def dashboard_data(request: Request) -> dict:
                 "timestamp": timestamp,
                 "date": format_datetime(timestamp),
                 "car": car,
-                "bike": bike,
                 "bus": bus,
+                "truck": truck,
+                "motorcycle": motorcycle,
+                "bicycle": bicycle,
             }
-            for timestamp, car, bike, bus in rows
+            for timestamp, car, bus, truck, motorcycle, bicycle in rows
         ]
     }
+
+
+@app.post("/dashboard/clear")
+def dashboard_clear(request: Request) -> dict:
+    conn = connect(request.app.state.db_path)
+    try:
+        deleted_events = conn.execute("SELECT COUNT(*) FROM traffic_events").fetchone()[0]
+        deleted_buckets = conn.execute("SELECT COUNT(*) FROM traffic_counts").fetchone()[0]
+        clear_db(conn)
+    finally:
+        conn.close()
+    return {"status": "ok", "deleted_events": deleted_events, "deleted_buckets": deleted_buckets}
 
 
 def main() -> None:
@@ -154,8 +195,10 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
+    parser.add_argument("--stream-url", default="http://127.0.0.1:8002/stream")
     args = parser.parse_args()
     app.state.db_path = args.db
+    app.state.stream_url = args.stream_url
     uvicorn.run(app, host=args.host, port=args.port)
 
 

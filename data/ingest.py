@@ -9,7 +9,7 @@ from data.db import (
     DEFAULT_DB_PATH,
     clear_db,
     connect,
-    fetch_counts,
+    fetch_rich_counts,
     insert_counts,
 )
 from data.mock_feed import generate_events
@@ -28,7 +28,15 @@ def aggregate_by_minute(
     for event in events:
         buckets[bucket_minute(event.timestamp)][event.vehicle_type] += 1
     return [
-        (ts, counts["car"], counts["bike"], counts["bus"])
+        (
+            ts,
+            counts["car"],
+            counts["bus"],
+            counts["truck"],
+            counts["motorcycle"],
+            counts["bicycle"],
+            counts["bicycle"],
+        )
         for ts, counts in sorted(buckets.items())
     ]
 
@@ -51,22 +59,24 @@ def main() -> None:
     try:
         clear_db(conn)
         insert_counts(conn, rows)
-        stored = fetch_counts(conn)
+        stored = fetch_rich_counts(conn)
     finally:
         conn.close()
 
     print(f"db: {args.db}")
     print(f"events: {len(events)} -> minute buckets: {len(stored)}")
     print()
-    print(f"{'minute':<17}{'car':>6}{'bike':>6}{'bus':>6}")
-    totals = [0, 0, 0]
-    for ts, car, bike, bus in stored:
+    print(f"{'minute':<17}{'car':>6}{'bus':>6}{'truck':>6}{'motor':>6}{'bicycle':>8}")
+    totals = [0, 0, 0, 0, 0]
+    for ts, car, bus, truck, motorcycle, bicycle in stored:
         totals[0] += car
-        totals[1] += bike
-        totals[2] += bus
+        totals[1] += bus
+        totals[2] += truck
+        totals[3] += motorcycle
+        totals[4] += bicycle
         minute = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
-        print(f"{minute:<17}{car:>6}{bike:>6}{bus:>6}")
-    print(f"{'TOTAL':<17}{totals[0]:>6}{totals[1]:>6}{totals[2]:>6}")
+        print(f"{minute:<17}{car:>6}{bus:>6}{truck:>6}{motorcycle:>6}{bicycle:>6}")
+    print(f"{'TOTAL':<17}{totals[0]:>6}{totals[1]:>6}{totals[2]:>6}{totals[3]:>6}{totals[4]:>6}")
 
 
 if __name__ == "__main__":
