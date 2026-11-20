@@ -6,12 +6,13 @@ The local database inspected during planning contained 73 stored minute buckets 
 
 ## Phase 1 — Short-term forecast
 
-- [ ] Forecast the total count for the next 15 minutes in three 5-minute buckets. Use a stable camera ID throughout, starting with `cam1`.
-- [ ] Start with a baseline that carries forward the recent count rate. Use completed minutes as inputs and show the forecast as a dashed line alongside observed counts. Keep the existing observed counts by vehicle type.
-- [ ] Add historical replay so the existing recording can demonstrate the forecast. In live mode, show when the most recent data is stale. Record capture coverage going forward so a known online minute with zero counts can be distinguished from missing data.
-- [ ] Backtest in chronological order. At each point, forecast using only earlier observations and compare with the next three observed 5-minute totals. Report mean absolute error in vehicles per 5-minute bucket and report how many forecasts could be evaluated.
+- [x] Forecast the total count for the next 30 minutes in six 5-minute buckets. Use a stable camera ID throughout, starting with `cam1`.
+- [x] Fit Prophet to completed counts and retain ridge regression for comparison. Save each issued forecast and keep its overnight points visible on the next day's chart.
+- [x] Add historical replay and show when there is insufficient recent data to issue a new forecast.
+- [x] Backtest in chronological order and compare mean absolute error with the recent-average baseline on the same eligible targets.
+- [ ] Record capture coverage so a known online minute with zero counts can be distinguished from missing data.
 
-**Done when** the dashboard can replay the recorded session, display the 15-minute forecast, and report its backtest error. Once continuous collection provides enough history, compare the baseline with a forecast based on the camera's local time of day and day of week. [Forecasting methods and time-series evaluation](https://otexts.com/fpp3/toolbox.html)
+**Done when** the dashboard can replay the recorded session, display the 30-minute forecast, and report its backtest error. Once continuous collection provides enough history, compare the baseline with a forecast based on the camera's local time of day and day of week. [Forecasting methods and time-series evaluation](https://otexts.com/fpp3/toolbox.html)
 
 ## Phase 2 — Continuous operation on Linux
 
@@ -27,7 +28,7 @@ The local database inspected during planning contained 73 stored minute buckets 
 - [ ] Configure each camera with a stable ID, display name, stream URL, latitude, longitude, and time zone.
 - [ ] Add minute totals keyed by camera ID and minute start before enabling concurrent streams. Raw events already carry a camera ID and can be used to rebuild per-camera history. Preserve any legacy totals whose source camera cannot be verified.
 - [ ] Run two configured streams on the Linux host and serve camera-specific status, totals, forecasts, and annotated streams.
-- [ ] Add an interactive map with one pin per configured location. Each pin shows camera status, the latest completed count, and the next 15-minute forecast when available. Clicking a pin opens that camera's chart and stream.
+- [ ] Add an interactive map with one pin per configured location. Each pin shows camera status, the latest completed count, and the next 30-minute forecast when available. Clicking a pin opens that camera's chart and stream.
 - [ ] Verify that the two feeds have independent counts and forecasts. Disconnect one feed and confirm that its status changes while the other feed continues collecting.
 
 **Done when** two configured locations can be monitored independently from the map.

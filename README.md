@@ -116,3 +116,29 @@ Options:
 
 - `dashboard.app`: `--host` (default `127.0.0.1`), `--port` (default `8001`),
   `--db` (default `data/traffic.db`)
+
+### Traffic forecasting
+
+The CV runner uses Prophet to forecast the next 30 minutes every five minutes.
+It needs nine complete five-minute buckets from the preceding four hours,
+including the most recent three buckets. Prophet fits a local trend with daily
+and weekly seasonality disabled while traffic history is sparse. The main graph overlays the
+forecast as total vehicles per minute. The forecast chart shows totals per five
+minutes. Both charts keep the previous day's forecast points visible if they
+extend past midnight. Select **Today** to focus the main graph on today's traffic.
+Choose a recorded date and a **Replay model** to compare Prophet or ridge
+regression with the recent-average baseline on complete target buckets. Prophet
+replay scores up to 24 forecast times per day. All eligible five-minute starts
+can be selected. The highlighted window runs from the chosen start through the
+following 30 minutes, including any portion after midnight. Saved forecasts keep their
+originally issued values and are labeled by method.
+
+Restart both processes after updating the project to start issuing and displaying
+forecasts. Keep the runner and dashboard on the same database and pass the same
+`--camera` if you use a camera ID other than `cam1`. Use one camera per database
+for this version. The dashboard groups dates in `Europe/Budapest` by default.
+Use `--timezone` to select a different IANA time zone.
+To issue live ridge forecasts instead, pass `--forecast-model ridge_ar` to both
+the CV runner and the dashboard.
+
+The dashboard's **Clear database** action also removes saved forecasts.

@@ -151,7 +151,7 @@ class FrameReader(threading.Thread):
 class CounterConfig:
     min_hits: int = 2
     forget_after: float = 3.0
-    min_move: float = 0.00
+    min_move: float = 0.02
     roi: Optional[list[tuple[float, float]]] = None
 
 
