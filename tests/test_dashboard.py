@@ -101,6 +101,22 @@ class DashboardPageTests(unittest.TestCase):
             finally:
                 remaining.close()
 
+    def test_clear_can_be_disabled_for_deployment(self) -> None:
+        from fastapi import HTTPException, Request
+
+        from dashboard.app import app, dashboard, dashboard_clear
+
+        allow_clear = app.state.allow_clear
+        app.state.allow_clear = False
+        try:
+            self.assertNotIn('id="clear-db"', dashboard())
+            request = Request({"type": "http", "app": app})
+            with self.assertRaises(HTTPException) as error:
+                dashboard_clear(request)
+            self.assertEqual(error.exception.status_code, 403)
+        finally:
+            app.state.allow_clear = allow_clear
+
 
 if __name__ == "__main__":
     unittest.main()

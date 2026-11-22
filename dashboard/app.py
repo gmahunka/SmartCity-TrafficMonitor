@@ -1,7 +1,10 @@
 import argparse
 import json
+import sqlite3
 import time
+from contextlib import asynccontextmanager, closing
 from datetime import date, datetime
+from html import escape
 from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -10,7 +13,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
-from data.db import DEFAULT_DB_PATH, clear_db, connect, fetch_completed_rich_counts
+from data.db import DEFAULT_DB_PATH, clear_db, connect, connect_readonly, fetch_completed_rich_counts
 from data.forecast import DEFAULT_CAMERA, DEFAULT_FORECAST_MODEL, DEFAULT_TIME_ZONE, FORECAST_MODELS, forecast_day
 
 PAGE = """<!doctype html>
@@ -52,7 +55,7 @@ PAGE = """<!doctype html>
     <h1>Traffic monitor</h1>
     <section class="panel">
       <div class="meta" id="status">Loading…</div>
-      <div class="actions"><button id="clear-db" type="button">Clear database</button></div>
+      CLEAR_ACTION
       <img class="stream" src="STREAM_URL" alt="Live annotated traffic stream">
       <div class="history-control">
         <label for="history-date">Date</label>
@@ -147,8 +150,7 @@ PAGE = """<!doctype html>
       drawLegend(mainForecastLegend, mainForecastLines);
       mainForecastStatus.hidden = !matchesSelection || forecast.date !== forecast.today;
       if (!mainForecastStatus.hidden) {
-        mainForecastStatus.textContent = forecast.status === "current"
-          ? "Forecast shown as total vehicles per minute" : forecastMessage();
+        mainForecastStatus.textContent = forecastMessage("Forecast shown as total vehicles per minute");
       }
       drawForecast();
     }
@@ -305,18 +307,22 @@ PAGE = """<!doctype html>
       legend.hidden = !legend.childElementCount;
     }
 
-    function forecastMessage() {
-      const waiting = "Waiting for the next five-minute forecast from the counter";
+    function forecastMessage(units = "Vehicles per 5 minutes") {
+      const latest = forecast.latest ?? forecast.carryover;
+      const issued = latest && forecast.date === forecast.today
+        ? `${modelName(latest.method)} forecast issued ${issueFormat.format(latest.cutoff * 1000)}` : "";
+      const model = modelName(forecast.model);
+      const waiting = `Waiting for the counter's next ${model} forecast`;
       const labels = {
-        current: "Vehicles per 5 minutes",
+        current: units,
         insufficient: forecast.consecutive_minutes >= forecast.input_minutes ? waiting
-          : `Waiting for continuous data · ${forecast.consecutive_minutes}/${forecast.input_minutes} completed minutes`,
-        training: `Waiting for ${modelName(forecast.model)} training data · ${forecast.training_examples}/${forecast.minimum_training_examples} usable ${forecast.model === "prophet" ? "buckets" : "examples"}`,
+          : `Next ${model} forecast needs ${forecast.input_minutes} consecutive completed minutes at a five-minute boundary (${forecast.consecutive_minutes}/${forecast.input_minutes} so far)`,
+        training: `Waiting for ${model} training data · ${forecast.training_examples}/${forecast.minimum_training_examples} usable ${forecast.model === "prophet" ? "buckets" : "examples"}`,
         awaiting: waiting,
         historical: "Vehicles per 5 minutes",
         upcoming: "Forecast for the selected date"
       };
-      return labels[forecast.status];
+      return [issued, labels[forecast.status]].filter(Boolean).join(" · ");
     }
 
     function drawForecast() {
@@ -401,7 +407,7 @@ PAGE = """<!doctype html>
       }
       await refreshForecast(historyDate.value, selectedReplayCutoff);
     }
-    clearButton.addEventListener("click", async () => {
+    clearButton?.addEventListener("click", async () => {
       if (!window.confirm("Clear all stored traffic events, minute counts, and forecasts?")) return;
       clearButton.disabled = true;
       try {
@@ -442,12 +448,25 @@ PAGE = """<!doctype html>
 </body>
 </html>"""
 
-app = FastAPI(title="Traffic dashboard")
+CLEAR_ACTION = '<div class="actions"><button id="clear-db" type="button">Clear database</button></div>'
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    path = app.state.db_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with closing(connect(path)):
+        pass
+    yield
+
+
+app = FastAPI(title="Traffic dashboard", lifespan=lifespan)
 app.state.db_path = DEFAULT_DB_PATH
 app.state.stream_url = "http://127.0.0.1:8002/stream"
 app.state.camera = DEFAULT_CAMERA
 app.state.time_zone = ZoneInfo(DEFAULT_TIME_ZONE)
 app.state.forecast_model = DEFAULT_FORECAST_MODEL
+app.state.allow_clear = True
 
 
 def format_datetime(timestamp: int) -> str:
@@ -456,9 +475,21 @@ def format_datetime(timestamp: int) -> str:
 
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard() -> str:
-    return PAGE.replace("STREAM_URL", app.state.stream_url).replace(
-        "FORECAST_TIME_ZONE", json.dumps(app.state.time_zone.key),
+    return (
+        PAGE.replace("CLEAR_ACTION", CLEAR_ACTION if app.state.allow_clear else "")
+        .replace("FORECAST_TIME_ZONE", json.dumps(app.state.time_zone.key))
+        .replace("STREAM_URL", escape(app.state.stream_url, quote=True))
     )
+
+
+@app.get("/health")
+def health(request: Request) -> dict:
+    try:
+        with closing(connect_readonly(request.app.state.db_path)) as conn:
+            conn.execute("SELECT timestamp FROM traffic_counts LIMIT 1").fetchone()
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=503, detail="Traffic database unavailable") from error
+    return {"status": "online"}
 
 
 @app.get("/dashboard/data")
@@ -508,6 +539,8 @@ def dashboard_forecast(
 
 @app.post("/dashboard/clear")
 def dashboard_clear(request: Request) -> dict:
+    if not request.app.state.allow_clear:
+        raise HTTPException(status_code=403, detail="Clearing the database is disabled")
     conn = connect(request.app.state.db_path)
     try:
         deleted_events = conn.execute("SELECT COUNT(*) FROM traffic_events").fetchone()[0]
@@ -527,11 +560,13 @@ def main() -> None:
     parser.add_argument("--forecast-model", choices=FORECAST_MODELS, default=DEFAULT_FORECAST_MODEL)
     parser.add_argument("--timezone", default=DEFAULT_TIME_ZONE)
     parser.add_argument("--stream-url", default="http://127.0.0.1:8002/stream")
+    parser.add_argument("--allow-clear", choices=("true", "false"), default="true")
     args = parser.parse_args()
     app.state.db_path = args.db
     app.state.stream_url = args.stream_url
     app.state.camera = args.camera
     app.state.forecast_model = args.forecast_model
+    app.state.allow_clear = args.allow_clear == "true"
     try:
         app.state.time_zone = ZoneInfo(args.timezone)
     except ZoneInfoNotFoundError:

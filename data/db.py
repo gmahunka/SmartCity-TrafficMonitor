@@ -15,7 +15,7 @@ _COUNT_COLUMNS = {
 }
 
 _CREATE_TABLE = """
-CREATE TABLE traffic_counts (
+CREATE TABLE IF NOT EXISTS traffic_counts (
     timestamp INTEGER PRIMARY KEY,
     car_count INTEGER NOT NULL DEFAULT 0,
     bus_count INTEGER NOT NULL DEFAULT 0,
@@ -50,43 +50,45 @@ CREATE TABLE IF NOT EXISTS traffic_forecasts (
 
 def connect(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
-    _ensure_schema(conn)
+    try:
+        _ensure_schema(conn)
+    except sqlite3.Error:
+        conn.close()
+        raise
     return conn
 
 
+def connect_readonly(db_path: Path) -> sqlite3.Connection:
+    return sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+
+
 def _ensure_schema(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS traffic_counts ("
-        "timestamp INTEGER PRIMARY KEY, car_count INTEGER NOT NULL DEFAULT 0,"
-        "bus_count INTEGER NOT NULL DEFAULT 0)"
-    )
-    existing = {row[1] for row in conn.execute("PRAGMA table_info(traffic_counts)")}
-    for column in ("truck_count", "motorcycle_count", "bicycle_count"):
-        if column not in existing:
-            conn.execute(
-                f"ALTER TABLE traffic_counts ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"
-            )
+    conn.execute(_CREATE_TABLE)
+    _ensure_columns(conn, "traffic_counts", {
+        column: "INTEGER NOT NULL DEFAULT 0"
+        for column in ("truck_count", "motorcycle_count", "bicycle_count")
+    })
     conn.execute(_CREATE_EVENTS)
     conn.execute(_CREATE_FORECASTS)
-    forecast_columns = _forecast_columns(conn)
-    for column, declaration in (
-        ("horizon_buckets", "INTEGER NOT NULL DEFAULT 3"),
-        ("predicted_buckets", "TEXT"),
-        ("model", "TEXT"),
-    ):
-        if column in forecast_columns:
-            continue
-        try:
-            conn.execute(f"ALTER TABLE traffic_forecasts ADD COLUMN {column} {declaration}")
-        except sqlite3.OperationalError:
-            # The runner and dashboard can open the same legacy database together.
-            if column not in _forecast_columns(conn):
-                raise
+    _ensure_columns(conn, "traffic_forecasts", {
+        "horizon_buckets": "INTEGER NOT NULL DEFAULT 3",
+        "predicted_buckets": "TEXT",
+        "model": "TEXT",
+    })
     conn.commit()
 
 
-def _forecast_columns(conn: sqlite3.Connection) -> set[str]:
-    return {row[1] for row in conn.execute("PRAGMA table_info(traffic_forecasts)")}
+def _ensure_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    for column, declaration in columns.items():
+        if column in existing:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
+        except sqlite3.OperationalError:
+            # The runner and dashboard can open the same legacy database together.
+            if column not in {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}:
+                raise
 
 
 def init_db(conn: sqlite3.Connection) -> None:
@@ -153,7 +155,7 @@ def insert_counts(
     conn.commit()
 
 
-def insert_events(conn: sqlite3.Connection, events: Iterable) -> None:
+def insert_events(conn: sqlite3.Connection, events: Iterable, *, commit: bool = True) -> None:
     conn.executemany(
         "INSERT INTO traffic_events "
         "(timestamp, vehicle_type, camera, track_id, confidence, direction)"
@@ -170,12 +172,15 @@ def insert_events(conn: sqlite3.Connection, events: Iterable) -> None:
             for event in events
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def upsert_counts(
     conn: sqlite3.Connection,
     rows: Iterable[Sequence[int]],
+    *,
+    commit: bool = True,
 ) -> None:
     conn.executemany(
         "INSERT INTO traffic_counts "
@@ -189,7 +194,8 @@ def upsert_counts(
         " bicycle_count = bicycle_count + excluded.bicycle_count",
         (_to_rich_row(row) for row in rows),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def fetch_counts(conn: sqlite3.Connection) -> list[tuple[int, int, int, int, int, int]]:

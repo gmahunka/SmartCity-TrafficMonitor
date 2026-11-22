@@ -6,6 +6,7 @@ from pathlib import Path
 from common.events import VehicleEvent
 from cv.detector import CounterConfig, TrackCounter
 from cv.run import _flush
+from data.backup import snapshot
 from data.db import clear_db, connect, fetch_rich_counts, insert_events, upsert_counts
 
 
@@ -55,6 +56,41 @@ class RichEventTests(unittest.TestCase):
             finally:
                 conn.close()
 
+    def test_cv_flush_rolls_back_events_if_count_write_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            conn = connect(Path(folder) / "traffic.db")
+            try:
+                conn.execute("""
+                    CREATE TRIGGER fail_counts BEFORE INSERT ON traffic_counts
+                    BEGIN SELECT RAISE(ABORT, 'cannot write counts'); END
+                """)
+                with self.assertRaises(sqlite3.IntegrityError):
+                    _flush(conn, [VehicleEvent(timestamp=120, vehicle_type="car")])
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM traffic_events").fetchone(), (0,))
+                self.assertEqual(fetch_rich_counts(conn), [])
+            finally:
+                conn.close()
+
+    def test_snapshot_restores_counts_and_refuses_existing_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            source, backup, restored = (Path(folder) / name for name in ("traffic.db", "backup.db", "restored.db"))
+            conn = connect(source)
+            try:
+                _flush(conn, [VehicleEvent(timestamp=120, vehicle_type="car")])
+                counts = snapshot(source, backup)
+                self.assertEqual(counts, {"traffic_events": 1, "traffic_counts": 1, "traffic_forecasts": 0})
+                self.assertEqual(snapshot(backup, restored), counts)
+                _flush(conn, [VehicleEvent(timestamp=120, vehicle_type="bus")])
+                with self.assertRaises(FileExistsError):
+                    snapshot(source, restored)
+            finally:
+                conn.close()
+            conn = connect(restored)
+            try:
+                self.assertEqual(fetch_rich_counts(conn), [(120, 1, 0, 0, 0, 0)])
+            finally:
+                conn.close()
+
     def test_clear_db_removes_events_and_counts(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             conn = connect(Path(folder) / "traffic.db")
@@ -68,7 +104,7 @@ class RichEventTests(unittest.TestCase):
                 conn.close()
 
     def test_tracked_vehicle_registers_after_hits_without_movement(self) -> None:
-        counter = TrackCounter(CounterConfig(min_hits=3))
+        counter = TrackCounter(CounterConfig(min_hits=3, min_move=0))
         det = lambda y: [(7, "car", 0.9, 50, y)]
         self.assertEqual(counter.update(1, det(10), 100, 100), [])
         self.assertEqual(counter.update(2, det(10), 100, 100), [])

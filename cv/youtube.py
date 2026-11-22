@@ -92,7 +92,7 @@ def resolve(url: str, max_height: int = 720) -> ResolvedStream:
     info = None
     for clients in _CLIENT_ATTEMPTS:
         opts = {'format': _format(max_height), 'quiet': True, 'no_warnings': True,
-                'noplaylist': True, 'skip_download': True}
+                'noplaylist': True, 'skip_download': True, 'socket_timeout': 15}
         if clients:
             opts['extractor_args'] = {'youtube': {'player_client': clients}}
         try:

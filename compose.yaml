@@ -1,0 +1,65 @@
+x-traffic: &traffic
+  build: .
+  init: true
+  restart: unless-stopped
+  environment:
+    TZ: ${TRAFFIC_TIMEZONE:-Europe/Budapest}
+  volumes:
+    - traffic-data:/var/lib/traffic
+  logging:
+    driver: local
+    options:
+      max-size: 10m
+      max-file: "3"
+
+services:
+  cv:
+    <<: *traffic
+    image: smartcity-trafficmonitor/cv:local
+    stop_grace_period: 40s
+    command:
+      - python
+      - -m
+      - cv.run
+      - "--url=${TRAFFIC_SOURCE:?Set TRAFFIC_SOURCE in .env}"
+      - "--db=/var/lib/traffic/traffic.db"
+      - "--camera=${TRAFFIC_CAMERA:-cam1}"
+      - "--forecast-model=${TRAFFIC_FORECAST_MODEL:-prophet}"
+      - "--model=/app/yolo26n.pt"
+      - "--device=cpu"
+      - "--max-fps=${TRAFFIC_MAX_FPS:-30}"
+      - "--max-height=${TRAFFIC_MAX_HEIGHT:-720}"
+      - "--stream-host=0.0.0.0"
+    ports:
+      - "${TRAFFIC_BIND_IP:-127.0.0.1}:8002:8002"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health', timeout=3).close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  dashboard:
+    <<: *traffic
+    image: smartcity-trafficmonitor/dashboard:local
+    command:
+      - python
+      - -m
+      - dashboard.app
+      - "--host=0.0.0.0"
+      - "--db=/var/lib/traffic/traffic.db"
+      - "--camera=${TRAFFIC_CAMERA:-cam1}"
+      - "--forecast-model=${TRAFFIC_FORECAST_MODEL:-prophet}"
+      - "--timezone=${TRAFFIC_TIMEZONE:-Europe/Budapest}"
+      - "--stream-url=${TRAFFIC_STREAM_URL:-http://127.0.0.1:8002/stream}"
+      - "--allow-clear=${TRAFFIC_ALLOW_CLEAR:-false}"
+    ports:
+      - "${TRAFFIC_BIND_IP:-127.0.0.1}:8001:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3).close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  traffic-data:

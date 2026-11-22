@@ -1,0 +1,12 @@
+**
+!pyproject.toml
+!README.md
+!common/
+!common/*.py
+!cv/
+!cv/*.py
+!dashboard/
+!dashboard/*.py
+!data/
+!data/*.py
+!yolo26n.pt

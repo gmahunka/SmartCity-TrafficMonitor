@@ -45,6 +45,10 @@ os.environ.setdefault(
     'OPENCV_FFMPEG_CAPTURE_OPTIONS',
     'rw_timeout;15000000|timeout;15000000|http_persistent;0',
 )
+_NETWORK_CAPTURE_TIMEOUTS = [
+    cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 15_000,
+    cv2.CAP_PROP_READ_TIMEOUT_MSEC, 15_000,
+]
 
 
 class FrameReader(threading.Thread):
@@ -75,15 +79,17 @@ class FrameReader(threading.Thread):
         paced = self.is_file
         if self.url.isdigit():
             cap = cv2.VideoCapture(int(self.url))
-        elif self.youtube:
-            self._stream = resolve_youtube(self.url, self.max_height)
-            self.info.update(title=self._stream.title, live=self._stream.is_live,
-                             height=self._stream.height)
-            paced = not self._stream.is_live          # a recorded video: play at its own speed
-            cap = cv2.VideoCapture(self._stream.url, cv2.CAP_FFMPEG)
+        elif self.is_file:
+            cap = cv2.VideoCapture(self.url)
         else:
-            cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG) if '://' in self.url \
-                else cv2.VideoCapture(self.url)
+            source_url = self.url
+            if self.youtube:
+                self._stream = resolve_youtube(self.url, self.max_height)
+                self.info.update(title=self._stream.title, live=self._stream.is_live,
+                                 height=self._stream.height)
+                paced = not self._stream.is_live
+                source_url = self._stream.url
+            cap = cv2.VideoCapture(source_url, cv2.CAP_FFMPEG, _NETWORK_CAPTURE_TIMEOUTS)
         if not paced:
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         return cap, paced
@@ -158,8 +164,7 @@ class CounterConfig:
 class TrackCounter:
     """Turns per-frame tracked boxes into one count per vehicle.
 
-    A track counts once it was seen in `min_hits` frames. The movement threshold
-    is disabled by default so low-FPS streams can still register stable tracks.
+    A track counts once it reaches `min_hits` and crosses `min_move`.
     `roi`: optional polygon [(x, y), ...] in 0..1; detections outside it are ignored.
     """
 
@@ -217,6 +222,7 @@ class DetectorSource(threading.Thread):
         self.max_fps, self.show = max_fps, show
         self.stop_event = threading.Event()
         self.jpeg: Optional[bytes] = None
+        self.last_processed_at: float | None = None
         self.status = {'source': 'camera', 'camera': camera, 'url': url, 'model': model,
                        'mode': 'movement', 'running': False, 'fps': 0.0, 'frames': 0,
                        'detections': 0, 'tracked_detections': 0, 'events': 0,
@@ -226,6 +232,7 @@ class DetectorSource(threading.Thread):
         self.reader.start()
         self.status['running'] = True
         last_seq, fps, totals, t_prev = 0, 0.0, Counter(), None
+        inference_failures = 0
         min_period = 1.0 / self.max_fps if self.max_fps else 0.0
         while not self.stop_event.is_set():
             t0 = time.time()
@@ -241,10 +248,14 @@ class DetectorSource(threading.Thread):
                 r = self.yolo.track(frame, persist=True, conf=self.conf, imgsz=self.imgsz,
                                     classes=list(COCO_TO_CLASS), tracker='bytetrack.yaml',
                                     device=self.device, verbose=False)[0]
-            except Exception as e:                                  # keep running
+            except Exception as e:
+                inference_failures += 1
+                if inference_failures >= 5:
+                    raise RuntimeError('inference failed on five consecutive frames') from e
                 self.status['error'] = f'detector: {e}'
-                time.sleep(0.5)
+                self.stop_event.wait(0.5)
                 continue
+            inference_failures = 0
             h, w = frame.shape[:2]
             dets, boxes = [], []
             if r.boxes is not None and len(r.boxes):
@@ -262,7 +273,7 @@ class DetectorSource(threading.Thread):
             self.status['tracked_detections'] += len(dets)
             for tid, vclass, confidence, x1, y1, x2, y2 in boxes:
                 if tid is not None:
-                    log.info(
+                    log.debug(
                         "detected track_id=%s class=%s confidence=%.3f "
                         "box=(%.1f, %.1f, %.1f, %.1f)",
                         tid, vclass, confidence, x1, y1, x2, y2,
@@ -282,8 +293,9 @@ class DetectorSource(threading.Thread):
             self.status.update(fps=round(fps, 1), frames=self.status['frames'] + 1,
                                active_tracks=len(self.counter.tracks))
             self._render(frame, boxes, totals, fps)
+            self.last_processed_at = time.monotonic()
             if min_period > dt:
-                time.sleep(min_period - dt)
+                self.stop_event.wait(min_period - dt)
         self.reader.stop()
         self.status['running'] = False
 
@@ -313,3 +325,4 @@ class DetectorSource(threading.Thread):
 
     def stop(self):
         self.stop_event.set()
+        self.reader.stop()
