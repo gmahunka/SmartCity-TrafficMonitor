@@ -36,6 +36,49 @@ Use `docker compose logs -f cv` to follow the runner.
   configure Docker to start at boot and verify recovery after a reboot and a
   camera outage.
 
+## Remote access with Tailscale
+
+Install Tailscale on the Linux host and the viewing device, then sign both in
+to the same Tailscale network (tailnet). In the host's `.env`, use these settings.
+
+```dotenv
+TRAFFIC_BIND_IP=127.0.0.1
+TRAFFIC_STREAM_URL=/camera/stream
+TRAFFIC_ALLOW_CLEAR=false
+```
+
+With the Compose services running, run these commands on the Linux host from the
+same Compose project directory. If Serve prints an HTTPS approval link, open it
+and complete the prompt before continuing.
+
+```sh
+sudo tailscale serve --bg 8001
+sudo tailscale serve --bg --set-path=/camera/ 8002
+tailscale serve status
+```
+
+On the viewing device, append `/dashboard` to the HTTPS address shown by
+`tailscale serve status`. Tailscale Serve uses one private HTTPS address on port
+443 and routes requests by path.
+
+| Browser request | Local destination on Linux |
+| --- | --- |
+| `/dashboard` | `http://127.0.0.1:8001/dashboard` |
+| `/camera/stream` | `http://127.0.0.1:8002/stream` |
+
+The browser loads the video from the same HTTPS address. Both Docker ports stay
+bound to loopback, and access is limited to your tailnet. The dashboard container
+is recreated using the existing database volume.
+
+To disable Tailscale use either:
+```sh
+tailscale serve --https=443 off
+```
+or
+```sh
+sudo tailscale serve reset
+```
+
 ## Backup and restore
 
 Choose a new backup filename each time. Run these commands while the dashboard

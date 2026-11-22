@@ -10,7 +10,6 @@ The local database inspected during planning contained 73 stored minute buckets 
 - [x] Fit Prophet to completed counts and retain ridge regression for comparison. Save each issued forecast and keep its overnight points visible on the next day's chart.
 - [x] Add historical replay and show when there is insufficient recent data to issue a new forecast.
 - [x] Backtest in chronological order and compare mean absolute error with the recent-average baseline on the same eligible targets.
-- [ ] Record capture coverage so a known online minute with zero counts can be distinguished from missing data.
 
 **Done when** the dashboard can replay the recorded session, display the 30-minute forecast, and report its backtest error. Once continuous collection provides enough history, compare the baseline with a forecast based on the camera's local time of day and day of week. [Forecasting methods and time-series evaluation](https://otexts.com/fpp3/toolbox.html)
 
@@ -19,7 +18,7 @@ The local database inspected during planning contained 73 stored minute buckets 
 - [x] Package the CV runner and dashboard as two Docker Compose services. Put the selected stream URL and stable camera ID in configuration so collection starts when the services start.
 - [ ] Start with one stream on the CPU and measure whether the host keeps up. Run the CV service without the optional OpenCV preview window.
 - [x] Configure shared persistent SQLite storage, automatic restart, and LAN options for the dashboard and embedded stream. Document backup, restore, and optional import of existing data.
-- [ ] Verify a fresh installation using the Linux instructions. Reboot the PC, interrupt and restore the stream, and check that collection resumes and earlier data is still present. Restore a backup to a separate database and verify that it opens.
+- [x] Verify a fresh installation using the Linux instructions. Reboot the PC, interrupt and restore the stream, and check that collection resumes and earlier data is still present. Restore a backup to a separate database and verify that it opens.
 
 **Done when** the PC starts collecting from the configured feed after boot, recovers from a temporary stream interruption, and serves the dashboard on the local network with the existing history intact. [Docker Compose restart policies](https://docs.docker.com/reference/compose-file/services/#restart) · [Persistent storage](https://docs.docker.com/reference/compose-file/volumes/)
 
